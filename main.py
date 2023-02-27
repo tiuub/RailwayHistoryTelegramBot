@@ -17,7 +17,7 @@ from pyhafas import HafasClient
 from pyhafas.profile import DBProfile
 from sqlalchemy.sql import ClauseElement
 
-engine = create_engine(os.getenv("DATABASE_URI", "sqlite:////data/db.db"))
+engine = create_engine(os.getenv("DATABASE_URI", "sqlite:///db.db"))
 Session = sessionmaker(bind=engine)
 Session.configure(bind=engine)
 Base = declarative_base()

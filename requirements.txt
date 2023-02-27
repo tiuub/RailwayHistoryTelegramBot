@@ -9,6 +9,7 @@ httpcore==0.16.3
 httpx==0.23.3
 hyperframe==6.0.1
 idna==3.4
+psycopg2==2.9.5
 pyhafas==0.3.0
 python-telegram-bot==20.1
 requests==2.28.2
