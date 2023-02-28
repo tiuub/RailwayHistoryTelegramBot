@@ -153,7 +153,7 @@ def get_station_by_name(session, name):
                           "name": best_location.name,
                           "longitude": best_location.longitude,
                           "latitude": best_location.latitude},
-                         name=name)
+                         eva=best_location.id)
 
 
 def get_journey_or_create_by_journey_id(session, journey_id, segments):
@@ -165,7 +165,7 @@ def get_user_or_create_by_user_id(session, user_id):
     return get_or_create(session, User, {"user_id": user_id, "username": user_id}, user_id=user_id)
 
 
-def get_segment_or_create_by_origin_destination_departuretime_arrivaltime(session, origin, destination, departureScheduledTime, arrivalScheduledTime):
+def get_segment_or_create_by_origin_destination_departuretime_arrivaltime(session, origin, destination, departureScheduledTime, arrivalScheduledTime, trainName=None):
     journeys = (client.journeys(
         origin=origin.eva,
         destination=destination.eva,
@@ -176,11 +176,53 @@ def get_segment_or_create_by_origin_destination_departuretime_arrivaltime(sessio
     journeys = [j for j in journeys if
                 len(j.legs) == 1 and j.legs[0].departure == departureScheduledTime and j.legs[
                     0].arrival == arrivalScheduledTime]
-    if not 0 < len(journeys) < 2:
-        raise Exception("Could not find a suitable connection!")
 
-    j = journeys[0]
-    leg = j.legs[0]
+    leg = None
+
+    if not 0 < len(journeys) < 2:
+        if trainName is None:
+            raise Exception("Received too many or too less journeys. No name of train given to distinguish.")
+
+        if len(journeys) > 1:
+            print("Received multiple journeys. Try to determine by name of train.")
+            journeys = [j for j in journeys if j.legs[0].name == trainName]
+
+            if not 0 < len(journeys) < 2:
+                raise Exception("Received too many journeys. Could not determine the specific train using the name of train.")
+
+            j = journeys[0]
+            leg = j.legs[0]
+        else:
+            print("Received too less journeys. Try to determine by departures.")
+            stationBoardLeg = None
+            for max_trips, product in [(25, {'suburban': False, 'bus': False, 'ferry': False, 'subway': False, 'tram': False, 'taxi': False}), (40,{})]:
+                departuers = client.departures(
+                                    station=origin.eva,
+                                    date=departureScheduledTime,
+                                    max_trips=max_trips,
+                                    products=product
+                                )
+                stationBoardLegs = [sbl for sbl in departuers if str(sbl.station.id) == str(origin.eva) and sbl.dateTime == departureScheduledTime]
+                for _stationBoardLeg in stationBoardLegs:
+                    _leg = client.trip(_stationBoardLeg.id)
+                    if str(_leg.destination.id) == str(destination.eva) and _leg.arrival == arrivalScheduledTime:
+                        stationBoardLeg = _leg
+                        break
+
+                if stationBoardLeg is None:
+                    continue
+                break
+
+            if stationBoardLeg is None:
+                raise Exception("Could not find suitable connection through departures.")
+
+            leg = stationBoardLeg
+    else:
+        j = journeys[0]
+        leg = j.legs[0]
+
+    if leg is None:
+        raise Exception("Leg is not set.")
 
     return get_or_create(session, Segment,
                          {"segment_id": leg.id,
@@ -235,9 +277,11 @@ def split_on_new_lines(s):
 
 async def toDatabase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Triggered toDatabase command by %i" % update.effective_user.id)
+    loading_message = await update.message.reply_text("\u23F3 Loading...", reply_to_message_id=update.message.id)
     input = update.message.text
-    try:
-        with Session() as session:
+    with Session() as session:
+        try:
+
             k = split_on_empty_lines(input)
 
             if len(k) <= 1:
@@ -256,6 +300,8 @@ async def toDatabase(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(l) < 4:
                     raise Exception("Segment lines are in wrong format or missing!")
 
+                trainName = l[0]
+
                 d = l[2].split(",")[0].split(" ")
                 departureScheduledTime = datetime.combine(date, datetime.strptime(d[1], "%H:%M").time()).replace(tzinfo=zoneinfo.ZoneInfo(key="Europe/Berlin"))
                 origin = get_station_by_name(session, " ".join(d[2:]))
@@ -264,7 +310,7 @@ async def toDatabase(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 destination = get_station_by_name(session, " ".join(d[2:]))
                 print(origin.name, "to", destination.name)
 
-                segments.append(get_segment_or_create_by_origin_destination_departuretime_arrivaltime(session, origin, destination, departureScheduledTime, arrivalScheduledTime))
+                segments.append(get_segment_or_create_by_origin_destination_departuretime_arrivaltime(session, origin, destination, departureScheduledTime, arrivalScheduledTime, trainName))
 
             journey_id = "#".join([s.segment_id for s in segments])
             user = get_user_or_create_by_user_id(session, update.effective_user.id)
@@ -278,11 +324,14 @@ async def toDatabase(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("\u2705 Saved in database!", reply_to_message_id=update.message.id)
             else:
                 print("Duped Journey %i" % journey.id)
-                await update.message.reply_text("\uE737 Duped Journey. Original Journey", reply_to_message_id=userjourney.message_id)
-                await update.message.reply_text("\uE737 Ignored.", reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Could not fetch message. e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Could not fetch this message! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+                await update.message.reply_text("\uE252 Duped Journey. Original Journey", reply_to_message_id=userjourney.message_id)
+                await update.message.reply_text("\uE252 Ignored.", reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Could not fetch message. e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Could not fetch this message! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -294,8 +343,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        with Session() as session:
+    with Session() as session:
+        try:
             instance = session.query(UserJourney).filter_by(
                 user=get_user_or_create_by_user_id(session, user_id=update.effective_user.id),
                 message_id=update.message.reply_to_message.id).one_or_none()
@@ -307,19 +356,23 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             print("Deleted journey")
             await update.message.reply_text("\u2705 Deleted journey", reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Deletion failed! e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Setting price failed! e.args: %s" % e.args,
-                                        reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Deletion failed! e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Setting price failed! e.args: %s" % e.args,
+                                            reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
 
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if len(context.args) < 0 or len(context.args) > 1:
-            raise Exception("Received too less or too much arguments!")
+    with Session() as session:
+        try:
+            if len(context.args) < 0 or len(context.args) > 1:
+                raise Exception("Received too less or too much arguments!")
 
-        price = context.args[0]
-        with Session() as session:
+            price = context.args[0]
+
             instance = session.query(UserJourney).filter_by(user=get_user_or_create_by_user_id(session, user_id=update.effective_user.id), message_id=update.message.reply_to_message.id).one_or_none()
 
             if instance is None:
@@ -336,18 +389,22 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             print("Price set to %s" % price)
             await update.message.reply_text("\u2705 Price set to %s" % price, reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Setting price failed! e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Setting price failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Setting price failed! e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Setting price failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
 
 
 async def category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if len(context.args) < 0 or len(context.args) > 2:
-            raise Exception("Received too less or too much arguments!")
+    with Session() as session:
+        try:
+            if len(context.args) < 0 or len(context.args) > 2:
+                raise Exception("Received too less or too much arguments!")
 
-        category = context.args[0]
-        with Session() as session:
+            category = context.args[0]
+
             instance = session.query(UserJourney).filter_by(user=get_user_or_create_by_user_id(session, user_id=update.effective_user.id), message_id=update.message.reply_to_message.id).one_or_none()
 
             if instance is None:
@@ -368,22 +425,26 @@ async def category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             print("Category set to %s" % category)
             await update.message.reply_text("\u2705 Category set to %s" % category, reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Setting category failed! e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Setting category failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Setting category failed! e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Setting category failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
 
 
 async def purpose(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if len(context.args) < 0 or len(context.args) > 2:
-            raise Exception("Received too less or too much arguments!")
+    with Session() as session:
+        try:
+            if len(context.args) < 0 or len(context.args) > 2:
+                raise Exception("Received too less or too much arguments!")
 
-        purpose = context.args[0]
-        with Session() as session:
+            purpose = context.args[0]
+
             instance = session.query(UserJourney).filter_by(user=get_user_or_create_by_user_id(session, user_id=update.effective_user.id), message_id=update.message.reply_to_message.id).one_or_none()
 
             if instance is None:
-                raise Exception("\uE550 Could not find journey! Maybe its deleted or a dupe.")
+                raise Exception("\uE333 Could not find journey! Maybe its deleted or a dupe.")
 
             purpose = purpose.lower()
             if purpose == "none":
@@ -400,17 +461,22 @@ async def purpose(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             print("Purpose set to %s" % purpose)
             await update.message.reply_text("\u2705 Purpose set to %s" % purpose, reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Setting purpose failed! e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Setting purpose failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Setting purpose failed! e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Setting purpose failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
+
 
 async def username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if len(context.args) < 0 or len(context.args) > 1:
-            raise Exception("Received too less or too much arguments!")
+    with Session() as session:
+        try:
+            if len(context.args) < 0 or len(context.args) > 1:
+                raise Exception("Received too less or too much arguments!")
 
-        username = context.args[0]
-        with Session() as session:
+            username = context.args[0]
+
             instance = session.query(User).filter_by(username=username).one_or_none()
 
             if instance is not None:
@@ -426,9 +492,13 @@ async def username(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             print("Username set to %s" % username)
             await update.message.reply_text("\u2705 Username set to %s" % username, reply_to_message_id=update.message.id)
-    except Exception as e:
-        print("Setting username failed! e.args: %s" % e.args)
-        await update.message.reply_text("\uE550 Setting username failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+        except Exception as e:
+            print("Setting username failed! e.args: %s" % e.args)
+            await update.message.reply_text("\uE333 Setting username failed! e.args: %s" % e.args, reply_to_message_id=update.message.id)
+            session.rollback()
+        else:
+            session.commit()
+
 
 if __name__ == "__main__":
     Base.metadata.create_all(engine)
