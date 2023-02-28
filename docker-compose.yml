@@ -14,7 +14,7 @@ services:
       PG_USER: ${PG_USER:-rhtb}
       PG_PASS: ${PG_PASS}
       PG_HOST: railwayhistorytelegrambot-postgres
-      PG_DB: ${PG_DB:-rhtb}"
+      PG_DB: ${PG_DB:-rhtb}
     networks:
       - rhtb_net
 
