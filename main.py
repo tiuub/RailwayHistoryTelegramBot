@@ -9,6 +9,7 @@ from sqlalchemy.orm import relationship
 
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
+import psycopg2
 
 from telegram import Update
 from telegram.ext import filters, MessageHandler, ApplicationBuilder, CommandHandler, ContextTypes
@@ -17,7 +18,7 @@ from pyhafas import HafasClient
 from pyhafas.profile import DBProfile
 from sqlalchemy.sql import ClauseElement
 
-engine = create_engine(os.getenv("DATABASE_URI", "sqlite:///db.db"))
+engine = create_engine('postgresql+psycopg2://%s:%s@%s:%s/%s' % (os.getenv("PG_USER"), os.getenv("PG_PASS"), os.getenv("PG_HOST"), os.getenv("PG_PORT", "5432"), os.getenv("PG_DB")))
 Session = sessionmaker(bind=engine)
 Session.configure(bind=engine)
 Base = declarative_base()
@@ -119,7 +120,7 @@ class Journey(Base):
 class User(Base):
     __tablename__ = 'user'
     id = Column(Integer, primary_key=True)
-    user_id = Column(String(), nullable=False, unique=True)
+    user_id = Column(String(30), nullable=False, unique=True)
     username = Column(String(50), nullable=False, unique=True)
 
     journeys = relationship("UserJourney", back_populates="user")
@@ -160,6 +161,7 @@ def get_journey_or_create_by_journey_id(session, journey_id, segments):
 
 
 def get_user_or_create_by_user_id(session, user_id):
+    user_id = str(user_id)
     return get_or_create(session, User, {"user_id": user_id, "username": user_id}, user_id=user_id)
 
 

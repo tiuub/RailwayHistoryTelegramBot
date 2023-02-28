@@ -1,0 +1,30 @@
+version: '3.3'
+
+networks:
+  rhtb_net:
+    driver: bridge
+    name: rhtb_net
+
+services:
+  railwayhistorytelegrambot:
+    container_name: railwayhistorytelegrambot
+    image: tiuub/railwayhistorytelegrambot
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      PG_USER: ${PG_USER:-rhtb}
+      PG_PASS: ${PG_PASS}
+      PG_HOST: railwayhistorytelegrambot-postgres
+      PG_DB: ${PG_DB:-rhtb}"
+    networks:
+      - rhtb_net
+
+  railwayhistorytelegrambot-postgres:
+    container_name: railwayhistorytelegrambot-postgres
+    image: postgres
+    restart: always
+    environment:
+      - POSTGRES_PASSWORD=${PG_PASS:?database password required}
+      - POSTGRES_USER=${PG_USER:-rhtb}
+      - POSTGRES_DB=${PG_DB:-rhtb}
+    networks:
+      - rhtb_net
